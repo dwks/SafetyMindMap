@@ -92,10 +92,23 @@ export default function MindMap() {
     const l = layoutRef.current;
     if (!l) return;
 
-    const vbX = l.bounds.minX - VIEWBOX_PAD;
-    const vbY = l.bounds.minY - VIEWBOX_PAD;
-    const vbW = l.bounds.maxX - l.bounds.minX + VIEWBOX_PAD * 2;
-    const vbH = l.bounds.maxY - l.bounds.minY + VIEWBOX_PAD * 2;
+    // Must match the viewBox expansion logic used for rendering
+    const contentW = l.bounds.maxX - l.bounds.minX + VIEWBOX_PAD * 2;
+    const contentH = l.bounds.maxY - l.bounds.minY + VIEWBOX_PAD * 2;
+    const aspect = screenW / viewH;
+    const cAspect = contentW / contentH;
+    let vbX: number, vbY: number, vbW: number, vbH: number;
+    if (aspect > cAspect) {
+      vbH = contentH;
+      vbW = contentH * aspect;
+      vbX = l.bounds.minX - VIEWBOX_PAD - (vbW - contentW) / 2;
+      vbY = l.bounds.minY - VIEWBOX_PAD;
+    } else {
+      vbW = contentW;
+      vbH = contentW / aspect;
+      vbX = l.bounds.minX - VIEWBOX_PAD;
+      vbY = l.bounds.minY - VIEWBOX_PAD - (vbH - contentH) / 2;
+    }
 
     const svgX = vbX + (invertedX / screenW) * vbW;
     const svgY = vbY + (invertedY / viewH) * vbH;
@@ -190,10 +203,28 @@ export default function MindMap() {
   }
 
   const { nodes, edges, bounds } = layout;
-  const vbX = bounds.minX - VIEWBOX_PAD;
-  const vbY = bounds.minY - VIEWBOX_PAD;
-  const vbW = bounds.maxX - bounds.minX + VIEWBOX_PAD * 2;
-  const vbH = bounds.maxY - bounds.minY + VIEWBOX_PAD * 2;
+
+  // Expand viewBox to match the screen aspect ratio so the linear
+  // pixel→viewBox mapping used by hit-testing is exact (no preserveAspectRatio distortion).
+  const contentW = bounds.maxX - bounds.minX + VIEWBOX_PAD * 2;
+  const contentH = bounds.maxY - bounds.minY + VIEWBOX_PAD * 2;
+  const screenAspect = screenW / viewH;
+  const contentAspect = contentW / contentH;
+
+  let vbX: number, vbY: number, vbW: number, vbH: number;
+  if (screenAspect > contentAspect) {
+    // Screen is wider — expand viewBox width, center horizontally
+    vbH = contentH;
+    vbW = contentH * screenAspect;
+    vbX = bounds.minX - VIEWBOX_PAD - (vbW - contentW) / 2;
+    vbY = bounds.minY - VIEWBOX_PAD;
+  } else {
+    // Screen is taller — expand viewBox height, center vertically
+    vbW = contentW;
+    vbH = contentW / screenAspect;
+    vbX = bounds.minX - VIEWBOX_PAD;
+    vbY = bounds.minY - VIEWBOX_PAD - (vbH - contentH) / 2;
+  }
 
   return (
     <GestureHandlerRootView style={styles.fill}>
