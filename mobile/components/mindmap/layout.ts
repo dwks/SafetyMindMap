@@ -40,7 +40,7 @@ function measureSubtree(node: TreeNode, expandedSet: Set<string>): number {
   return Math.max(h, total);
 }
 
-interface LayoutResult {
+export interface LayoutResult {
   nodes: PositionedNode[];
   edges: Edge[];
   bounds: { minX: number; maxX: number; minY: number; maxY: number };

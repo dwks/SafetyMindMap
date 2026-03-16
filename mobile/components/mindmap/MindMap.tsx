@@ -1,15 +1,17 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
+import Animated, { runOnJS, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import Svg from 'react-native-svg';
 
 import { API_BASE_URL } from '@/constants/api';
 import { ThemedText } from '@/components/ThemedText';
 import { TreeNode } from '@/types/tree';
-import { layoutTree } from './layout';
+import { layoutTree, LayoutResult } from './layout';
 import MindMapEdge from './MindMapEdge';
 import MindMapNode from './MindMapNode';
+
+const VIEWBOX_PAD = 40;
 
 function collectDefaultExpanded(node: TreeNode, set: Set<string>): void {
   if (node.default_expanded && node.id) set.add(node.id);
@@ -46,7 +48,6 @@ export default function MindMap() {
       })
       .then((data: TreeNode) => {
         assignIds(data);
-        // Root is always expanded, plus any default_expanded nodes
         const initial = new Set<string>();
         if (data.id) initial.add(data.id);
         collectDefaultExpanded(data, initial);
@@ -73,6 +74,46 @@ export default function MindMap() {
     return layoutTree(tree, expandedIds);
   }, [tree, expandedIds]);
 
+  // Keep layout in a ref so the tap handler always has current data
+  const layoutRef = useRef<LayoutResult | null>(null);
+  layoutRef.current = layout;
+
+  // Hit-test tap against nodes, mapping screen coords to SVG viewBox coords
+  const handleTap = useCallback((absX: number, absY: number) => {
+    const l = layoutRef.current;
+    if (!l) return;
+
+    const vbX = l.bounds.minX - VIEWBOX_PAD;
+    const vbY = l.bounds.minY - VIEWBOX_PAD;
+    const vbW = l.bounds.maxX - l.bounds.minX + VIEWBOX_PAD * 2;
+    const vbH = l.bounds.maxY - l.bounds.minY + VIEWBOX_PAD * 2;
+
+    // Map screen point to SVG viewBox coordinates
+    const svgX = vbX + (absX / screenW) * vbW;
+    const svgY = vbY + (absY / screenH) * vbH;
+
+    for (const node of l.nodes) {
+      const hitPad = 4; // extra tap target padding
+      if (
+        svgX >= node.x - node.width / 2 - hitPad &&
+        svgX <= node.x + node.width / 2 + hitPad &&
+        svgY >= node.y - node.height / 2 - hitPad &&
+        svgY <= node.y + node.height / 2 + hitPad
+      ) {
+        handleNodePress(node.id);
+        return;
+      }
+    }
+  }, [screenW, screenH, handleNodePress]);
+
+  const tapGesture = Gesture.Tap()
+    .onEnd((e) => {
+      // e.absoluteX/Y are window coordinates; undo pan/zoom transform
+      const localX = (e.absoluteX - translateX.value) / scale.value;
+      const localY = (e.absoluteY - translateY.value) / scale.value;
+      runOnJS(handleTap)(localX, localY);
+    });
+
   const panGesture = Gesture.Pan()
     .minDistance(10)
     .onStart(() => {
@@ -92,7 +133,10 @@ export default function MindMap() {
       scale.value = Math.min(3.0, Math.max(0.3, savedScale.value * e.scale));
     });
 
-  const composed = Gesture.Simultaneous(panGesture, pinchGesture);
+  const composed = Gesture.Exclusive(
+    tapGesture,
+    Gesture.Simultaneous(panGesture, pinchGesture),
+  );
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
@@ -120,16 +164,15 @@ export default function MindMap() {
   }
 
   const { nodes, edges, bounds } = layout;
-  const pad = 40;
-  const vbX = bounds.minX - pad;
-  const vbY = bounds.minY - pad;
-  const vbW = bounds.maxX - bounds.minX + pad * 2;
-  const vbH = bounds.maxY - bounds.minY + pad * 2;
+  const vbX = bounds.minX - VIEWBOX_PAD;
+  const vbY = bounds.minY - VIEWBOX_PAD;
+  const vbW = bounds.maxX - bounds.minX + VIEWBOX_PAD * 2;
+  const vbH = bounds.maxY - bounds.minY + VIEWBOX_PAD * 2;
 
   return (
     <GestureHandlerRootView style={styles.fill}>
       <GestureDetector gesture={composed}>
-        <Animated.View style={[styles.fill, animatedStyle]}>
+        <Animated.View style={[{ width: screenW, height: screenH }, animatedStyle]}>
           <Svg
             width={screenW}
             height={screenH}
@@ -139,7 +182,7 @@ export default function MindMap() {
               <MindMapEdge key={`e-${i}`} edge={edge} />
             ))}
             {nodes.map((node) => (
-              <MindMapNode key={node.id} node={node} onPress={handleNodePress} />
+              <MindMapNode key={node.id} node={node} />
             ))}
           </Svg>
         </Animated.View>

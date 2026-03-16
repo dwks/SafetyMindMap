@@ -19,8 +19,10 @@ export default function MindMapNode({ node, onPress }: Props) {
       : node.x + node.width / 2 + indicatorRadius + 2;
   const indicatorY = node.y;
 
+  const handlePress = () => onPress?.(node.id);
+
   return (
-    <G onPress={() => onPress?.(node.id)}>
+    <G>
       <Rect
         x={node.x - node.width / 2}
         y={node.y - node.height / 2}
@@ -28,6 +30,7 @@ export default function MindMapNode({ node, onPress }: Props) {
         height={node.height}
         rx={8}
         fill={node.color}
+        onPress={handlePress}
       />
       <SvgText
         x={node.x}
@@ -48,6 +51,7 @@ export default function MindMapNode({ node, onPress }: Props) {
             fill={node.color}
             stroke="white"
             strokeWidth={1.5}
+            onPress={handlePress}
           />
           <SvgText
             x={indicatorX}
