@@ -32,6 +32,7 @@ export default function MindMap() {
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [viewH, setViewH] = useState(screenH);
 
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -74,12 +75,12 @@ export default function MindMap() {
     return layoutTree(tree, expandedIds);
   }, [tree, expandedIds]);
 
-  // Keep layout in a ref so the tap handler always has current data
   const layoutRef = useRef<LayoutResult | null>(null);
   layoutRef.current = layout;
 
-  // Hit-test tap against nodes, mapping screen coords to SVG viewBox coords
-  const handleTap = useCallback((absX: number, absY: number) => {
+  // Hit-test: map tap position (in the stable wrapper's coordinate space)
+  // through the inverse transform to get SVG-local coords, then to viewBox coords.
+  const handleTap = useCallback((localX: number, localY: number) => {
     const l = layoutRef.current;
     if (!l) return;
 
@@ -88,12 +89,11 @@ export default function MindMap() {
     const vbW = l.bounds.maxX - l.bounds.minX + VIEWBOX_PAD * 2;
     const vbH = l.bounds.maxY - l.bounds.minY + VIEWBOX_PAD * 2;
 
-    // Map screen point to SVG viewBox coordinates
-    const svgX = vbX + (absX / screenW) * vbW;
-    const svgY = vbY + (absY / screenH) * vbH;
+    const svgX = vbX + (localX / screenW) * vbW;
+    const svgY = vbY + (localY / viewH) * vbH;
 
     for (const node of l.nodes) {
-      const hitPad = 4; // extra tap target padding
+      const hitPad = 4;
       if (
         svgX >= node.x - node.width / 2 - hitPad &&
         svgX <= node.x + node.width / 2 + hitPad &&
@@ -104,17 +104,19 @@ export default function MindMap() {
         return;
       }
     }
-  }, [screenW, screenH, handleNodePress]);
+  }, [screenW, viewH, handleNodePress]);
+
+  const halfW = screenW / 2;
+  const halfH = viewH / 2;
 
   const tapGesture = Gesture.Tap()
     .onEnd((e) => {
-      // Undo the center-pivot transform to get local SVG coordinates
-      // The animated transform is: translate(screenW/2+tx, screenH/2+ty) → scale → translate(-screenW/2, -screenH/2)
-      // So screen point (sx,sy) maps to local: lx = (sx - screenW/2 - tx) / s + screenW/2
-      const halfW = screenW / 2;
-      const halfH = screenH / 2;
-      const localX = (e.absoluteX - halfW - translateX.value) / scale.value + halfW;
-      const localY = (e.absoluteY - halfH - translateY.value) / scale.value + halfH;
+      // e.x/e.y is relative to the wrapper view (stable, no transform).
+      // Invert the inner Animated.View's center-pivot transform:
+      //   parentPt = (localPt - half) * scale + half + translate
+      //   localPt  = (parentPt - half - translate) / scale + half
+      const localX = (e.x - halfW - translateX.value) / scale.value + halfW;
+      const localY = (e.y - halfH - translateY.value) / scale.value + halfH;
       runOnJS(handleTap)(localX, localY);
     });
 
@@ -137,17 +139,11 @@ export default function MindMap() {
       scale.value = Math.min(3.0, Math.max(0.3, savedScale.value * e.scale));
     });
 
-  // Race: tap and pan/pinch start simultaneously; whichever recognizes first wins.
-  // Tap recognizes on finger-up; pan recognizes after minDistance — so quick taps
-  // register as taps, drags register as pan, no waiting.
   const composed = Gesture.Race(
     tapGesture,
     Gesture.Simultaneous(panGesture, pinchGesture),
   );
 
-  // Scale around screen center (translate to center, scale, translate back)
-  const halfW = screenW / 2;
-  const halfH = screenH / 2;
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: halfW + translateX.value },
@@ -184,19 +180,24 @@ export default function MindMap() {
   return (
     <GestureHandlerRootView style={styles.fill}>
       <GestureDetector gesture={composed}>
-        <Animated.View style={[{ width: screenW, height: screenH, backgroundColor: '#121212' }, animatedStyle]}>
-          <Svg
-            width={screenW}
-            height={screenH}
-            viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`}
-          >
-            {edges.map((edge, i) => (
-              <MindMapEdge key={`e-${i}`} edge={edge} />
-            ))}
-            {nodes.map((node) => (
-              <MindMapNode key={node.id} node={node} />
-            ))}
-          </Svg>
+        <Animated.View
+          style={styles.fill}
+          onLayout={(e) => setViewH(e.nativeEvent.layout.height)}
+        >
+          <Animated.View style={[{ width: screenW, height: viewH, backgroundColor: '#121212' }, animatedStyle]}>
+            <Svg
+              width={screenW}
+              height={viewH}
+              viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`}
+            >
+              {edges.map((edge, i) => (
+                <MindMapEdge key={`e-${i}`} edge={edge} />
+              ))}
+              {nodes.map((node) => (
+                <MindMapNode key={node.id} node={node} />
+              ))}
+            </Svg>
+          </Animated.View>
         </Animated.View>
       </GestureDetector>
     </GestureHandlerRootView>
