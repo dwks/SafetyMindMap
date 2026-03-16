@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
-import Svg from 'react-native-svg';
+import Svg, { Circle as SvgCircle } from 'react-native-svg';
 
 import { API_BASE_URL } from '@/constants/api';
 import { ThemedText } from '@/components/ThemedText';
@@ -33,6 +33,12 @@ export default function MindMap() {
   const [error, setError] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [viewH, setViewH] = useState(screenH);
+  const [debugTaps, setDebugTaps] = useState<Array<{
+    raw: { x: number; y: number };       // e.x, e.y from gesture
+    inverted: { x: number; y: number };   // after transform inversion
+    svg: { x: number; y: number };        // in viewBox coordinates
+    tx: number; ty: number; s: number;    // transform state at tap time
+  }>>([]);
 
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -78,9 +84,11 @@ export default function MindMap() {
   const layoutRef = useRef<LayoutResult | null>(null);
   layoutRef.current = layout;
 
-  // Hit-test: map tap position (in the stable wrapper's coordinate space)
-  // through the inverse transform to get SVG-local coords, then to viewBox coords.
-  const handleTap = useCallback((localX: number, localY: number) => {
+  const handleTapDebug = useCallback((
+    rawX: number, rawY: number,
+    invertedX: number, invertedY: number,
+    tx: number, ty: number, s: number,
+  ) => {
     const l = layoutRef.current;
     if (!l) return;
 
@@ -89,8 +97,19 @@ export default function MindMap() {
     const vbW = l.bounds.maxX - l.bounds.minX + VIEWBOX_PAD * 2;
     const vbH = l.bounds.maxY - l.bounds.minY + VIEWBOX_PAD * 2;
 
-    const svgX = vbX + (localX / screenW) * vbW;
-    const svgY = vbY + (localY / viewH) * vbH;
+    const svgX = vbX + (invertedX / screenW) * vbW;
+    const svgY = vbY + (invertedY / viewH) * vbH;
+
+    // Keep last 5 taps for debug
+    setDebugTaps((prev) => [
+      ...prev.slice(-4),
+      {
+        raw: { x: rawX, y: rawY },
+        inverted: { x: invertedX, y: invertedY },
+        svg: { x: svgX, y: svgY },
+        tx, ty, s,
+      },
+    ]);
 
     for (const node of l.nodes) {
       const hitPad = 4;
@@ -111,13 +130,12 @@ export default function MindMap() {
 
   const tapGesture = Gesture.Tap()
     .onEnd((e) => {
-      // e.x/e.y is relative to the wrapper view (stable, no transform).
-      // Invert the inner Animated.View's center-pivot transform:
-      //   parentPt = (localPt - half) * scale + half + translate
-      //   localPt  = (parentPt - half - translate) / scale + half
-      const localX = (e.x - halfW - translateX.value) / scale.value + halfW;
-      const localY = (e.y - halfH - translateY.value) / scale.value + halfH;
-      runOnJS(handleTap)(localX, localY);
+      const tx = translateX.value;
+      const ty = translateY.value;
+      const s = scale.value;
+      const invertedX = (e.x - halfW - tx) / s + halfW;
+      const invertedY = (e.y - halfH - ty) / s + halfH;
+      runOnJS(handleTapDebug)(e.x, e.y, invertedX, invertedY, tx, ty, s);
     });
 
   const panGesture = Gesture.Pan()
@@ -196,8 +214,30 @@ export default function MindMap() {
               {nodes.map((node) => (
                 <MindMapNode key={node.id} node={node} />
               ))}
+              {/* Debug: blue circles at computed SVG coordinates */}
+              {debugTaps.map((tap, i) => (
+                <SvgCircle
+                  key={`debug-svg-${i}`}
+                  cx={tap.svg.x}
+                  cy={tap.svg.y}
+                  r={8}
+                  fill="blue"
+                  opacity={0.8}
+                />
+              ))}
             </Svg>
           </Animated.View>
+          {/* Debug overlay: shows raw + computed coords */}
+          <View style={styles.debugOverlay} pointerEvents="none">
+            {debugTaps.slice(-3).map((tap, i) => (
+              <ThemedText key={`debug-${i}`} style={styles.debugText}>
+                raw=({Math.round(tap.raw.x)},{Math.round(tap.raw.y)})
+                inv=({Math.round(tap.inverted.x)},{Math.round(tap.inverted.y)})
+                svg=({Math.round(tap.svg.x)},{Math.round(tap.svg.y)})
+                t=({Math.round(tap.tx)},{Math.round(tap.ty)}) s={tap.s.toFixed(2)}
+              </ThemedText>
+            ))}
+          </View>
         </Animated.View>
       </GestureDetector>
     </GestureHandlerRootView>
@@ -212,5 +252,19 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  debugOverlay: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    right: 8,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    padding: 6,
+    borderRadius: 6,
+  },
+  debugText: {
+    fontSize: 10,
+    color: '#0f0',
+    fontFamily: 'monospace',
   },
 });
