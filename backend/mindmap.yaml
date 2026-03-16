@@ -39,7 +39,7 @@ children:
           - title: Research Engineer
           - title: Governance
       - title: Management/Fieldbuilding
-          children:
+        children:
           - title: Research Manager
       - title: Make orgs run well
         children:
