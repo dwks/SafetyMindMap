@@ -36,14 +36,12 @@ export default function MindMap() {
   const [debugTaps, setDebugTaps] = useState<Array<{
     ex: number; ey: number;
     absX: number; absY: number;
-    // A=blue: current center-pivot inversion
-    // B=red: undo translate only, no scale
-    // C=green: simple divide by scale
-    // D=yellow: scale around (0,0) not center
+    // A=blue: (e-half-t)/s+half (center-pivot inversion)
+    // B=red: e-t (translate only)
+    // E=white: (e+screenW*(s-1)-t)/s (correct for double-centered transform)
     svgA: { x: number; y: number };
     svgB: { x: number; y: number };
-    svgC: { x: number; y: number };
-    svgD: { x: number; y: number };
+    svgE: { x: number; y: number };
     tx: number; ty: number; s: number;
   }>>([]);
 
@@ -121,21 +119,18 @@ export default function MindMap() {
       y: vbY + (py / viewH) * vbH,
     });
 
-    // A (blue): current center-pivot inversion: (e - half - t) / s + half
+    // A (blue): (e - half - t) / s + half — correct IF RN doesn't add center-pivot
     const aX = (ex - halfW - tx) / s + halfW;
     const aY = (ey - halfH - ty) / s + halfH;
 
-    // B (red): undo translate only, no scale: e - t
+    // B (red): e - t — translate only, no scale
     const bX = ex - tx;
     const bY = ey - ty;
 
-    // C (green): simple: (e - t) / s
-    const cX = (ex - tx) / s;
-    const cY = (ey - ty) / s;
-
-    // D (yellow): scale around screen center: (e - half) / s + half - t / s
-    const dX = (ex - halfW) / s + halfW - tx / s;
-    const dY = (ey - halfH) / s + halfH - ty / s;
+    // E (white): (e + screen*(s-1) - t) / s — correct for DOUBLE-centered transform
+    // (RN center-origin + explicit center-pivot = double centering)
+    const eX = (ex + screenW * (s - 1) - tx) / s;
+    const eY = (ey + viewH * (s - 1) - ty) / s;
 
     setDebugTaps((prev) => [
       ...prev.slice(-4),
@@ -143,8 +138,7 @@ export default function MindMap() {
         ex, ey, absX, absY,
         svgA: toSvg(aX, aY),
         svgB: toSvg(bX, bY),
-        svgC: toSvg(cX, cY),
-        svgD: toSvg(dX, dY),
+        svgE: toSvg(eX, eY),
         tx, ty, s,
       },
     ]);
@@ -255,13 +249,12 @@ export default function MindMap() {
               {nodes.map((node) => (
                 <MindMapNode key={node.id} node={node} />
               ))}
-              {/* Debug dots: A=blue B=red C=green D=yellow */}
+              {/* Debug dots: A=blue B=red E=white */}
               {debugTaps.map((tap, i) => (
                 <React.Fragment key={`debug-${i}`}>
                   <SvgCircle cx={tap.svgA.x} cy={tap.svgA.y} r={10} fill="blue" opacity={0.7} />
                   <SvgCircle cx={tap.svgB.x} cy={tap.svgB.y} r={8} fill="red" opacity={0.7} />
-                  <SvgCircle cx={tap.svgC.x} cy={tap.svgC.y} r={6} fill="lime" opacity={0.9} />
-                  <SvgCircle cx={tap.svgD.x} cy={tap.svgD.y} r={5} fill="yellow" opacity={0.9} />
+                  <SvgCircle cx={tap.svgE.x} cy={tap.svgE.y} r={6} fill="white" opacity={0.9} />
                 </React.Fragment>
               ))}
             </Svg>
@@ -272,7 +265,7 @@ export default function MindMap() {
               screenW={Math.round(screenW)} viewH={Math.round(viewH)} halfW={Math.round(halfW)} halfH={Math.round(halfH)}
             </ThemedText>
             <ThemedText style={styles.debugText}>
-              A=blue: (e-half-t)/s+half  B=red: e-t{'\n'}C=green: (e-t)/s  D=yellow: (e-half)/s+half-t/s
+              A=blue: (e-half-t)/s+half{'\n'}B=red: e-t{'\n'}E=white: (e+screen*(s-1)-t)/s
             </ThemedText>
             {debugTaps.slice(-2).map((tap, i) => (
               <ThemedText key={`debug-${i}`} style={styles.debugText}>
