@@ -160,12 +160,15 @@ function placeSubtree(
   const hasChildren = !!(node.children && node.children.length > 0);
   const isExpanded = expandedIds.has(node.id!);
 
+  // x is the parent-facing edge; compute center from it
+  const centerX = side === 'right' ? x + w / 2 : x - w / 2;
+
   nodes.push({
     id: node.id!,
     title: node.title,
     icon: node.icon,
     color,
-    x,
+    x: centerX,
     y: yCenter,
     width: w,
     height: h,
@@ -175,23 +178,18 @@ function placeSubtree(
     depth,
   });
 
-  // Edge from parent edge to this node's edge
-  let startX: number, endX: number;
-  if (side === 'right') {
-    // Find parent node to get its width
-    const parentNode = nodes.find(n => n.id === parentId);
-    startX = parentNode ? parentNode.x + parentNode.width / 2 : 0;
-    endX = x - w / 2;
-  } else {
-    const parentNode = nodes.find(n => n.id === parentId);
-    startX = parentNode ? parentNode.x - parentNode.width / 2 : 0;
-    endX = x + w / 2;
-  }
+  // Edge from parent edge to this node's parent-facing edge
+  const parentNode = nodes.find(n => n.id === parentId);
+  const startX = parentNode
+    ? side === 'right'
+      ? parentNode.x + parentNode.width / 2
+      : parentNode.x - parentNode.width / 2
+    : 0;
 
   edges.push({
     startX,
     startY: parentY,
-    endX,
+    endX: x,
     endY: yCenter,
     color,
     side,
@@ -210,7 +208,8 @@ function placeSubtree(
   }
   totalHeight += (children.length - 1) * V_PADDING;
 
-  const nextX = side === 'right' ? x + w / 2 + H_GAP : x - w / 2 - H_GAP;
+  // nextX is the parent-facing edge for the next level of children
+  const nextX = side === 'right' ? x + w + H_GAP : x - w - H_GAP;
   let currentY = yCenter - totalHeight / 2;
 
   for (let i = 0; i < children.length; i++) {

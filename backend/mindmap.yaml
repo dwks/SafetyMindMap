@@ -37,7 +37,7 @@ children:
         children:
           - title: Research Scientist
           - title: Research Engineer
-          - title: Governance
+          - title: Policy Researcher
       - title: Management/Fieldbuilding
         children:
           - title: Research Manager
@@ -83,5 +83,5 @@ children:
     color: "#3498DB"
     children:
       - title: CG Career Transition
-      - title: LTFF
+      - title: Long-Term Future Fund (LTFF)
       - title: Manifund
