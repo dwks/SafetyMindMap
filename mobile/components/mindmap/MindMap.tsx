@@ -34,10 +34,16 @@ export default function MindMap() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [viewH, setViewH] = useState(screenH);
   const [debugTaps, setDebugTaps] = useState<Array<{
-    ex: number; ey: number;               // e.x, e.y from gesture
-    absX: number; absY: number;           // e.absoluteX, e.absoluteY
-    svgInverted: { x: number; y: number };  // blue: with transform inversion
-    svgDirect: { x: number; y: number };    // red: raw e.x/e.y mapped directly
+    ex: number; ey: number;
+    absX: number; absY: number;
+    // A=blue: current center-pivot inversion
+    // B=red: undo translate only, no scale
+    // C=green: simple divide by scale
+    // D=yellow: scale around (0,0) not center
+    svgA: { x: number; y: number };
+    svgB: { x: number; y: number };
+    svgC: { x: number; y: number };
+    svgD: { x: number; y: number };
     tx: number; ty: number; s: number;
   }>>([]);
 
@@ -104,44 +110,55 @@ export default function MindMap() {
   const handleTapDebug = useCallback((
     ex: number, ey: number,
     absX: number, absY: number,
-    invertedX: number, invertedY: number,
     tx: number, ty: number, s: number,
   ) => {
     const l = layoutRef.current;
     if (!l) return;
 
     const { vbX, vbY, vbW, vbH } = computeViewBox(l);
+    const toSvg = (px: number, py: number) => ({
+      x: vbX + (px / screenW) * vbW,
+      y: vbY + (py / viewH) * vbH,
+    });
 
-    // Blue: with transform inversion
-    const svgInvX = vbX + (invertedX / screenW) * vbW;
-    const svgInvY = vbY + (invertedY / viewH) * vbH;
+    // A (blue): current center-pivot inversion: (e - half - t) / s + half
+    const aX = (ex - halfW - tx) / s + halfW;
+    const aY = (ey - halfH - ty) / s + halfH;
 
-    // Red: raw e.x/e.y mapped directly (no inversion)
-    const svgDirX = vbX + (ex / screenW) * vbW;
-    const svgDirY = vbY + (ey / viewH) * vbH;
+    // B (red): undo translate only, no scale: e - t
+    const bX = ex - tx;
+    const bY = ey - ty;
+
+    // C (green): simple: (e - t) / s
+    const cX = (ex - tx) / s;
+    const cY = (ey - ty) / s;
+
+    // D (yellow): scale around screen center: (e - half) / s + half - t / s
+    const dX = (ex - halfW) / s + halfW - tx / s;
+    const dY = (ey - halfH) / s + halfH - ty / s;
 
     setDebugTaps((prev) => [
       ...prev.slice(-4),
       {
         ex, ey, absX, absY,
-        svgInverted: { x: svgInvX, y: svgInvY },
-        svgDirect: { x: svgDirX, y: svgDirY },
+        svgA: toSvg(aX, aY),
+        svgB: toSvg(bX, bY),
+        svgC: toSvg(cX, cY),
+        svgD: toSvg(dX, dY),
         tx, ty, s,
       },
     ]);
-  }, [screenW, viewH, computeViewBox]);
+  }, [screenW, viewH, halfW, halfH, computeViewBox]);
 
   const halfW = screenW / 2;
   const halfH = viewH / 2;
 
   const tapGesture = Gesture.Tap()
     .onEnd((e) => {
-      const tx = translateX.value;
-      const ty = translateY.value;
-      const s = scale.value;
-      const invertedX = (e.x - halfW - tx) / s + halfW;
-      const invertedY = (e.y - halfH - ty) / s + halfH;
-      runOnJS(handleTapDebug)(e.x, e.y, e.absoluteX, e.absoluteY, invertedX, invertedY, tx, ty, s);
+      runOnJS(handleTapDebug)(
+        e.x, e.y, e.absoluteX, e.absoluteY,
+        translateX.value, translateY.value, scale.value,
+      );
     });
 
   const panGesture = Gesture.Pan()
@@ -238,11 +255,13 @@ export default function MindMap() {
               {nodes.map((node) => (
                 <MindMapNode key={node.id} node={node} />
               ))}
-              {/* Debug: blue=inverted, red=direct mapping */}
+              {/* Debug dots: A=blue B=red C=green D=yellow */}
               {debugTaps.map((tap, i) => (
                 <React.Fragment key={`debug-${i}`}>
-                  <SvgCircle cx={tap.svgInverted.x} cy={tap.svgInverted.y} r={8} fill="blue" opacity={0.8} />
-                  <SvgCircle cx={tap.svgDirect.x} cy={tap.svgDirect.y} r={6} fill="red" opacity={0.8} />
+                  <SvgCircle cx={tap.svgA.x} cy={tap.svgA.y} r={10} fill="blue" opacity={0.7} />
+                  <SvgCircle cx={tap.svgB.x} cy={tap.svgB.y} r={8} fill="red" opacity={0.7} />
+                  <SvgCircle cx={tap.svgC.x} cy={tap.svgC.y} r={6} fill="lime" opacity={0.9} />
+                  <SvgCircle cx={tap.svgD.x} cy={tap.svgD.y} r={5} fill="yellow" opacity={0.9} />
                 </React.Fragment>
               ))}
             </Svg>
@@ -252,11 +271,12 @@ export default function MindMap() {
             <ThemedText style={styles.debugText}>
               screenW={Math.round(screenW)} viewH={Math.round(viewH)} halfW={Math.round(halfW)} halfH={Math.round(halfH)}
             </ThemedText>
-            {debugTaps.slice(-3).map((tap, i) => (
+            <ThemedText style={styles.debugText}>
+              A=blue: (e-half-t)/s+half  B=red: e-t{'\n'}C=green: (e-t)/s  D=yellow: (e-half)/s+half-t/s
+            </ThemedText>
+            {debugTaps.slice(-2).map((tap, i) => (
               <ThemedText key={`debug-${i}`} style={styles.debugText}>
-                e.xy=({Math.round(tap.ex)},{Math.round(tap.ey)}) abs=({Math.round(tap.absX)},{Math.round(tap.absY)})
-                {'\n'}blue=({Math.round(tap.svgInverted.x)},{Math.round(tap.svgInverted.y)}) red=({Math.round(tap.svgDirect.x)},{Math.round(tap.svgDirect.y)})
-                {'\n'}t=({Math.round(tap.tx)},{Math.round(tap.ty)}) s={tap.s.toFixed(2)}
+                e=({Math.round(tap.ex)},{Math.round(tap.ey)}) abs=({Math.round(tap.absX)},{Math.round(tap.absY)}) t=({Math.round(tap.tx)},{Math.round(tap.ty)}) s={tap.s.toFixed(2)}
               </ThemedText>
             ))}
           </View>
