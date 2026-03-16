@@ -80,6 +80,7 @@ export default function MindMap() {
 
   const prevLayoutRef = useRef<PrevLayout | null>(null);
   const animFrameRef = useRef<number>(0);
+  const animTargetLayoutRef = useRef<LayoutResult | null>(null);
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/api/tree`)
@@ -123,6 +124,7 @@ export default function MindMap() {
       // Cancel any in-progress animation
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
 
+      animTargetLayoutRef.current = layout;
       const startTime = Date.now();
       setAnimProgress(0);
 
@@ -141,6 +143,7 @@ export default function MindMap() {
       animFrameRef.current = requestAnimationFrame(animate);
     } else {
       // First layout — no animation, just save positions
+      animTargetLayoutRef.current = layout;
       savePrevLayout(layout);
     }
 
@@ -162,7 +165,10 @@ export default function MindMap() {
     if (!layout) return null;
 
     const prev = prevLayoutRef.current;
-    const t = animProgress;
+    // If layout changed but the useEffect hasn't started the animation yet,
+    // treat progress as 0 to avoid a flash of final positions.
+    const layoutIsNew = layout !== animTargetLayoutRef.current;
+    const t = (layoutIsNew && prev) ? 0 : animProgress;
     const settled = t >= 1 || !prev;
 
     // Interpolate nodes
