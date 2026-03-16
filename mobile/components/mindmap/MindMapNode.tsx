@@ -22,7 +22,7 @@ export default function MindMapNode({ node, onPress }: Props) {
   const handlePress = () => onPress?.(node.id);
 
   return (
-    <G>
+    <G opacity={node.opacity ?? 1}>
       <Rect
         x={node.x - node.width / 2}
         y={node.y - node.height / 2}

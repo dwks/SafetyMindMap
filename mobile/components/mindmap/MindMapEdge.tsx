@@ -16,7 +16,7 @@ export default function MindMapEdge({ edge }: Props) {
       d={d}
       stroke={edge.color}
       strokeWidth={2}
-      strokeOpacity={0.5}
+      strokeOpacity={(edge.opacity ?? 1) * 0.5}
       fill="none"
     />
   );

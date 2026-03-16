@@ -23,6 +23,7 @@ export interface PositionedNode {
   isExpanded: boolean;
   side: 'left' | 'right' | 'root';
   depth: number;
+  opacity?: number;
 }
 
 export interface Edge {
@@ -32,4 +33,5 @@ export interface Edge {
   endY: number;
   color: string;
   side: 'left' | 'right';
+  opacity?: number;
 }
