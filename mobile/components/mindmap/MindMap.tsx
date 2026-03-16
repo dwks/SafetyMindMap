@@ -139,11 +139,6 @@ export default function MindMap() {
     return layoutTree(tree, expandedIds);
   }, [tree, expandedIds]);
 
-  // Reset camera on layout change
-  useEffect(() => {
-    if (layout) setCameraVb(null);
-  }, [layout]);
-
   // Start animation when layout changes
   useEffect(() => {
     if (!layout) return;
