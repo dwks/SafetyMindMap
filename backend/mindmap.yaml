@@ -1,0 +1,60 @@
+title: AI Safety
+icon: "\U0001F9E0"
+default_expanded: true
+children:
+  - title: Technical Research
+    color: "#4A90D9"
+    default_expanded: true
+    children:
+      - title: Alignment
+        description: >
+          Research on ensuring AI systems pursue intended goals.
+        children:
+          - title: RLHF
+          - title: Constitutional AI
+          - title: Scalable Oversight
+      - title: Interpretability
+        children:
+          - title: Mechanistic Interpretability
+          - title: Sparse Autoencoders
+          - title: Probing
+      - title: Evaluations
+      - title: Governance & Policy
+
+  - title: Career Paths
+    color: "#6BBF59"
+    children:
+      - title: Research Scientist
+      - title: Research Engineer
+      - title: Policy & Governance
+      - title: Field Building
+
+  - title: Programs & Fellowships
+    color: "#E8A838"
+    subtree: events
+    filter: {type: Fellowship}
+    group_by: start_date
+
+  - title: Conferences & Events
+    color: "#D94A4A"
+    subtree: events
+    filter: {type: Conference}
+    group_by: start_date
+
+  - title: Organizations
+    color: "#9B59B6"
+    children:
+      - title: AI Labs (Safety Teams)
+        children:
+          - title: Anthropic
+          - title: DeepMind Safety
+          - title: OpenAI Safety
+      - title: Independent Research
+        children:
+          - title: ARC
+          - title: MIRI
+          - title: Redwood Research
+          - title: FAR AI
+
+  - title: Funding & Grants
+    color: "#1ABC9C"
