@@ -34,10 +34,11 @@ export default function MindMap() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [viewH, setViewH] = useState(screenH);
   const [debugTaps, setDebugTaps] = useState<Array<{
-    raw: { x: number; y: number };       // e.x, e.y from gesture
-    inverted: { x: number; y: number };   // after transform inversion
-    svg: { x: number; y: number };        // in viewBox coordinates
-    tx: number; ty: number; s: number;    // transform state at tap time
+    ex: number; ey: number;               // e.x, e.y from gesture
+    absX: number; absY: number;           // e.absoluteX, e.absoluteY
+    svgInverted: { x: number; y: number };  // blue: with transform inversion
+    svgDirect: { x: number; y: number };    // red: raw e.x/e.y mapped directly
+    tx: number; ty: number; s: number;
   }>>([]);
 
   const translateX = useSharedValue(0);
@@ -84,59 +85,51 @@ export default function MindMap() {
   const layoutRef = useRef<LayoutResult | null>(null);
   layoutRef.current = layout;
 
+  const computeViewBox = useCallback((l: LayoutResult) => {
+    const contentW = l.bounds.maxX - l.bounds.minX + VIEWBOX_PAD * 2;
+    const contentH = l.bounds.maxY - l.bounds.minY + VIEWBOX_PAD * 2;
+    const aspect = screenW / viewH;
+    const cAspect = contentW / contentH;
+    if (aspect > cAspect) {
+      const vbH = contentH;
+      const vbW = contentH * aspect;
+      return { vbX: l.bounds.minX - VIEWBOX_PAD - (vbW - contentW) / 2, vbY: l.bounds.minY - VIEWBOX_PAD, vbW, vbH };
+    } else {
+      const vbW = contentW;
+      const vbH = contentW / aspect;
+      return { vbX: l.bounds.minX - VIEWBOX_PAD, vbY: l.bounds.minY - VIEWBOX_PAD - (vbH - contentH) / 2, vbW, vbH };
+    }
+  }, [screenW, viewH]);
+
   const handleTapDebug = useCallback((
-    rawX: number, rawY: number,
+    ex: number, ey: number,
+    absX: number, absY: number,
     invertedX: number, invertedY: number,
     tx: number, ty: number, s: number,
   ) => {
     const l = layoutRef.current;
     if (!l) return;
 
-    // Must match the viewBox expansion logic used for rendering
-    const contentW = l.bounds.maxX - l.bounds.minX + VIEWBOX_PAD * 2;
-    const contentH = l.bounds.maxY - l.bounds.minY + VIEWBOX_PAD * 2;
-    const aspect = screenW / viewH;
-    const cAspect = contentW / contentH;
-    let vbX: number, vbY: number, vbW: number, vbH: number;
-    if (aspect > cAspect) {
-      vbH = contentH;
-      vbW = contentH * aspect;
-      vbX = l.bounds.minX - VIEWBOX_PAD - (vbW - contentW) / 2;
-      vbY = l.bounds.minY - VIEWBOX_PAD;
-    } else {
-      vbW = contentW;
-      vbH = contentW / aspect;
-      vbX = l.bounds.minX - VIEWBOX_PAD;
-      vbY = l.bounds.minY - VIEWBOX_PAD - (vbH - contentH) / 2;
-    }
+    const { vbX, vbY, vbW, vbH } = computeViewBox(l);
 
-    const svgX = vbX + (invertedX / screenW) * vbW;
-    const svgY = vbY + (invertedY / viewH) * vbH;
+    // Blue: with transform inversion
+    const svgInvX = vbX + (invertedX / screenW) * vbW;
+    const svgInvY = vbY + (invertedY / viewH) * vbH;
 
-    // Keep last 5 taps for debug
+    // Red: raw e.x/e.y mapped directly (no inversion)
+    const svgDirX = vbX + (ex / screenW) * vbW;
+    const svgDirY = vbY + (ey / viewH) * vbH;
+
     setDebugTaps((prev) => [
       ...prev.slice(-4),
       {
-        raw: { x: rawX, y: rawY },
-        inverted: { x: invertedX, y: invertedY },
-        svg: { x: svgX, y: svgY },
+        ex, ey, absX, absY,
+        svgInverted: { x: svgInvX, y: svgInvY },
+        svgDirect: { x: svgDirX, y: svgDirY },
         tx, ty, s,
       },
     ]);
-
-    for (const node of l.nodes) {
-      const hitPad = 4;
-      if (
-        svgX >= node.x - node.width / 2 - hitPad &&
-        svgX <= node.x + node.width / 2 + hitPad &&
-        svgY >= node.y - node.height / 2 - hitPad &&
-        svgY <= node.y + node.height / 2 + hitPad
-      ) {
-        handleNodePress(node.id);
-        return;
-      }
-    }
-  }, [screenW, viewH, handleNodePress]);
+  }, [screenW, viewH, computeViewBox]);
 
   const halfW = screenW / 2;
   const halfH = viewH / 2;
@@ -148,7 +141,7 @@ export default function MindMap() {
       const s = scale.value;
       const invertedX = (e.x - halfW - tx) / s + halfW;
       const invertedY = (e.y - halfH - ty) / s + halfH;
-      runOnJS(handleTapDebug)(e.x, e.y, invertedX, invertedY, tx, ty, s);
+      runOnJS(handleTapDebug)(e.x, e.y, e.absoluteX, e.absoluteY, invertedX, invertedY, tx, ty, s);
     });
 
   const panGesture = Gesture.Pan()
@@ -245,27 +238,25 @@ export default function MindMap() {
               {nodes.map((node) => (
                 <MindMapNode key={node.id} node={node} />
               ))}
-              {/* Debug: blue circles at computed SVG coordinates */}
+              {/* Debug: blue=inverted, red=direct mapping */}
               {debugTaps.map((tap, i) => (
-                <SvgCircle
-                  key={`debug-svg-${i}`}
-                  cx={tap.svg.x}
-                  cy={tap.svg.y}
-                  r={8}
-                  fill="blue"
-                  opacity={0.8}
-                />
+                <React.Fragment key={`debug-${i}`}>
+                  <SvgCircle cx={tap.svgInverted.x} cy={tap.svgInverted.y} r={8} fill="blue" opacity={0.8} />
+                  <SvgCircle cx={tap.svgDirect.x} cy={tap.svgDirect.y} r={6} fill="red" opacity={0.8} />
+                </React.Fragment>
               ))}
             </Svg>
           </Animated.View>
           {/* Debug overlay: shows raw + computed coords */}
           <View style={styles.debugOverlay} pointerEvents="none">
+            <ThemedText style={styles.debugText}>
+              screenW={Math.round(screenW)} viewH={Math.round(viewH)} halfW={Math.round(halfW)} halfH={Math.round(halfH)}
+            </ThemedText>
             {debugTaps.slice(-3).map((tap, i) => (
               <ThemedText key={`debug-${i}`} style={styles.debugText}>
-                raw=({Math.round(tap.raw.x)},{Math.round(tap.raw.y)})
-                inv=({Math.round(tap.inverted.x)},{Math.round(tap.inverted.y)})
-                svg=({Math.round(tap.svg.x)},{Math.round(tap.svg.y)})
-                t=({Math.round(tap.tx)},{Math.round(tap.ty)}) s={tap.s.toFixed(2)}
+                e.xy=({Math.round(tap.ex)},{Math.round(tap.ey)}) abs=({Math.round(tap.absX)},{Math.round(tap.absY)})
+                {'\n'}blue=({Math.round(tap.svgInverted.x)},{Math.round(tap.svgInverted.y)}) red=({Math.round(tap.svgDirect.x)},{Math.round(tap.svgDirect.y)})
+                {'\n'}t=({Math.round(tap.tx)},{Math.round(tap.ty)}) s={tap.s.toFixed(2)}
               </ThemedText>
             ))}
           </View>
