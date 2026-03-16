@@ -2,10 +2,19 @@ title: AI Safety
 icon: "\U0001F9E0"
 default_expanded: true
 children:
-  - title: Technical Research
+  - title: Threat Models
     color: "#4A90D9"
-    default_expanded: true
     children:
+      - title: Robustness Failures
+      - title: Misuse Risk
+      - title: Loss-of-Control Risk
+
+  - title: Technical Research
+    color: "#E67E22"
+    children:
+      - title: Harmlessness
+        children:
+          - title: Jailbreaks
       - title: Alignment
         description: >
           Research on ensuring AI systems pursue intended goals.
@@ -16,18 +25,27 @@ children:
       - title: Interpretability
         children:
           - title: Mechanistic Interpretability
-          - title: Sparse Autoencoders
-          - title: Probing
-      - title: Evaluations
-      - title: Governance & Policy
+          - title: Sparse Autoencoders (SAEs)
+          - title: Linear Probes
+      - title: Evals
 
   - title: Career Paths
     color: "#6BBF59"
+    default_expanded: true
     children:
-      - title: Research Scientist
-      - title: Research Engineer
-      - title: Policy & Governance
-      - title: Field Building
+      - title: Individual Contributor
+        children:
+          - title: Research Scientist
+          - title: Research Engineer
+          - title: Governance
+      - title: Management/Fieldbuilding
+          children:
+          - title: Research Manager
+      - title: Make orgs run well
+        children:
+          - title: Operations
+          - title: Safety roles in orgs
+          - title: Your specialty in a safety org
 
   - title: Programs & Fellowships
     color: "#E8A838"
@@ -58,3 +76,12 @@ children:
 
   - title: Funding & Grants
     color: "#1ABC9C"
+    children:
+      - title: Coefficient Giving (CG)
+
+  - title: Your First Funding
+    color: "#3498DB"
+    children:
+      - title: CG Career Transition
+      - title: LTFF
+      - title: Manifund
