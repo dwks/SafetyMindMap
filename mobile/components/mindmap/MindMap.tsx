@@ -108,9 +108,13 @@ export default function MindMap() {
 
   const tapGesture = Gesture.Tap()
     .onEnd((e) => {
-      // e.absoluteX/Y are window coordinates; undo pan/zoom transform
-      const localX = (e.absoluteX - translateX.value) / scale.value;
-      const localY = (e.absoluteY - translateY.value) / scale.value;
+      // Undo the center-pivot transform to get local SVG coordinates
+      // The animated transform is: translate(screenW/2+tx, screenH/2+ty) → scale → translate(-screenW/2, -screenH/2)
+      // So screen point (sx,sy) maps to local: lx = (sx - screenW/2 - tx) / s + screenW/2
+      const halfW = screenW / 2;
+      const halfH = screenH / 2;
+      const localX = (e.absoluteX - halfW - translateX.value) / scale.value + halfW;
+      const localY = (e.absoluteY - halfH - translateY.value) / scale.value + halfH;
       runOnJS(handleTap)(localX, localY);
     });
 
@@ -133,16 +137,24 @@ export default function MindMap() {
       scale.value = Math.min(3.0, Math.max(0.3, savedScale.value * e.scale));
     });
 
-  const composed = Gesture.Exclusive(
+  // Race: tap and pan/pinch start simultaneously; whichever recognizes first wins.
+  // Tap recognizes on finger-up; pan recognizes after minDistance — so quick taps
+  // register as taps, drags register as pan, no waiting.
+  const composed = Gesture.Race(
     tapGesture,
     Gesture.Simultaneous(panGesture, pinchGesture),
   );
 
+  // Scale around screen center (translate to center, scale, translate back)
+  const halfW = screenW / 2;
+  const halfH = screenH / 2;
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
-      { translateX: translateX.value },
-      { translateY: translateY.value },
+      { translateX: halfW + translateX.value },
+      { translateY: halfH + translateY.value },
       { scale: scale.value },
+      { translateX: -halfW },
+      { translateY: -halfH },
     ],
   }));
 
@@ -172,7 +184,7 @@ export default function MindMap() {
   return (
     <GestureHandlerRootView style={styles.fill}>
       <GestureDetector gesture={composed}>
-        <Animated.View style={[{ width: screenW, height: screenH }, animatedStyle]}>
+        <Animated.View style={[{ width: screenW, height: screenH, backgroundColor: '#121212' }, animatedStyle]}>
           <Svg
             width={screenW}
             height={screenH}
