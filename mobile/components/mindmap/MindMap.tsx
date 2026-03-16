@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
-import Svg, { Circle as SvgCircle } from 'react-native-svg';
+import Svg from 'react-native-svg';
 
 import { API_BASE_URL } from '@/constants/api';
 import { ThemedText } from '@/components/ThemedText';
@@ -27,23 +27,28 @@ function assignIds(node: TreeNode, counter = { value: 0 }): void {
   }
 }
 
+function computeViewBox(bounds: LayoutResult['bounds'], screenW: number, viewH: number) {
+  const contentW = bounds.maxX - bounds.minX + VIEWBOX_PAD * 2;
+  const contentH = bounds.maxY - bounds.minY + VIEWBOX_PAD * 2;
+  const screenAspect = screenW / viewH;
+  const contentAspect = contentW / contentH;
+  if (screenAspect > contentAspect) {
+    const vbH = contentH;
+    const vbW = contentH * screenAspect;
+    return { vbX: bounds.minX - VIEWBOX_PAD - (vbW - contentW) / 2, vbY: bounds.minY - VIEWBOX_PAD, vbW, vbH };
+  } else {
+    const vbW = contentW;
+    const vbH = contentW / screenAspect;
+    return { vbX: bounds.minX - VIEWBOX_PAD, vbY: bounds.minY - VIEWBOX_PAD - (vbH - contentH) / 2, vbW, vbH };
+  }
+}
+
 export default function MindMap() {
   const { width: screenW, height: screenH } = useWindowDimensions();
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [viewH, setViewH] = useState(screenH);
-  const [debugTaps, setDebugTaps] = useState<Array<{
-    ex: number; ey: number;
-    absX: number; absY: number;
-    // A=blue: (e-half-t)/s+half (center-pivot inversion)
-    // B=red: e-t (translate only)
-    // E=white: (e+screenW*(s-1)-t)/s (correct for double-centered transform)
-    svgA: { x: number; y: number };
-    svgB: { x: number; y: number };
-    svgE: { x: number; y: number };
-    tx: number; ty: number; s: number;
-  }>>([]);
 
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -89,70 +94,41 @@ export default function MindMap() {
   const layoutRef = useRef<LayoutResult | null>(null);
   layoutRef.current = layout;
 
-  const computeViewBox = useCallback((l: LayoutResult) => {
-    const contentW = l.bounds.maxX - l.bounds.minX + VIEWBOX_PAD * 2;
-    const contentH = l.bounds.maxY - l.bounds.minY + VIEWBOX_PAD * 2;
-    const aspect = screenW / viewH;
-    const cAspect = contentW / contentH;
-    if (aspect > cAspect) {
-      const vbH = contentH;
-      const vbW = contentH * aspect;
-      return { vbX: l.bounds.minX - VIEWBOX_PAD - (vbW - contentW) / 2, vbY: l.bounds.minY - VIEWBOX_PAD, vbW, vbH };
-    } else {
-      const vbW = contentW;
-      const vbH = contentW / aspect;
-      return { vbX: l.bounds.minX - VIEWBOX_PAD, vbY: l.bounds.minY - VIEWBOX_PAD - (vbH - contentH) / 2, vbW, vbH };
-    }
-  }, [screenW, viewH]);
-
-  const handleTapDebug = useCallback((
-    ex: number, ey: number,
-    absX: number, absY: number,
-    tx: number, ty: number, s: number,
-  ) => {
-    const l = layoutRef.current;
-    if (!l) return;
-
-    const { vbX, vbY, vbW, vbH } = computeViewBox(l);
-    const toSvg = (px: number, py: number) => ({
-      x: vbX + (px / screenW) * vbW,
-      y: vbY + (py / viewH) * vbH,
-    });
-
-    // A (blue): (e - half - t) / s + half — correct IF RN doesn't add center-pivot
-    const aX = (ex - halfW - tx) / s + halfW;
-    const aY = (ey - halfH - ty) / s + halfH;
-
-    // B (red): e - t — translate only, no scale
-    const bX = ex - tx;
-    const bY = ey - ty;
-
-    // E (white): (e + screen*(s-1) - t) / s — correct for DOUBLE-centered transform
-    // (RN center-origin + explicit center-pivot = double centering)
-    const eX = (ex + screenW * (s - 1) - tx) / s;
-    const eY = (ey + viewH * (s - 1) - ty) / s;
-
-    setDebugTaps((prev) => [
-      ...prev.slice(-4),
-      {
-        ex, ey, absX, absY,
-        svgA: toSvg(aX, aY),
-        svgB: toSvg(bX, bY),
-        svgE: toSvg(eX, eY),
-        tx, ty, s,
-      },
-    ]);
-  }, [screenW, viewH, halfW, halfH, computeViewBox]);
-
   const halfW = screenW / 2;
   const halfH = viewH / 2;
 
+  // Hit-test tap: invert the simplified transform [translate, scale]
+  // RN applies scale around view center, so:
+  //   screenPt = (localPt - half) * s + half + t
+  //   localPt  = (screenPt - half - t) / s + half
+  const handleTap = useCallback((ex: number, ey: number, tx: number, ty: number, s: number) => {
+    const l = layoutRef.current;
+    if (!l) return;
+
+    const localX = (ex - halfW - tx) / s + halfW;
+    const localY = (ey - halfH - ty) / s + halfH;
+
+    const { vbX, vbY, vbW, vbH } = computeViewBox(l.bounds, screenW, viewH);
+    const svgX = vbX + (localX / screenW) * vbW;
+    const svgY = vbY + (localY / viewH) * vbH;
+
+    for (const node of l.nodes) {
+      const hitPad = 6;
+      if (
+        svgX >= node.x - node.width / 2 - hitPad &&
+        svgX <= node.x + node.width / 2 + hitPad &&
+        svgY >= node.y - node.height / 2 - hitPad &&
+        svgY <= node.y + node.height / 2 + hitPad
+      ) {
+        handleNodePress(node.id);
+        return;
+      }
+    }
+  }, [screenW, viewH, halfW, halfH, handleNodePress]);
+
   const tapGesture = Gesture.Tap()
     .onEnd((e) => {
-      runOnJS(handleTapDebug)(
-        e.x, e.y, e.absoluteX, e.absoluteY,
-        translateX.value, translateY.value, scale.value,
-      );
+      runOnJS(handleTap)(e.x, e.y, translateX.value, translateY.value, scale.value);
     });
 
   const panGesture = Gesture.Pan()
@@ -179,13 +155,13 @@ export default function MindMap() {
     Gesture.Simultaneous(panGesture, pinchGesture),
   );
 
+  // Simplified transform: just translate + scale.
+  // RN applies transforms around view center automatically.
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
-      { translateX: halfW + translateX.value },
-      { translateY: halfH + translateY.value },
+      { translateX: translateX.value },
+      { translateY: translateY.value },
       { scale: scale.value },
-      { translateX: -halfW },
-      { translateY: -halfH },
     ],
   }));
 
@@ -207,28 +183,7 @@ export default function MindMap() {
   }
 
   const { nodes, edges, bounds } = layout;
-
-  // Expand viewBox to match the screen aspect ratio so the linear
-  // pixel→viewBox mapping used by hit-testing is exact (no preserveAspectRatio distortion).
-  const contentW = bounds.maxX - bounds.minX + VIEWBOX_PAD * 2;
-  const contentH = bounds.maxY - bounds.minY + VIEWBOX_PAD * 2;
-  const screenAspect = screenW / viewH;
-  const contentAspect = contentW / contentH;
-
-  let vbX: number, vbY: number, vbW: number, vbH: number;
-  if (screenAspect > contentAspect) {
-    // Screen is wider — expand viewBox width, center horizontally
-    vbH = contentH;
-    vbW = contentH * screenAspect;
-    vbX = bounds.minX - VIEWBOX_PAD - (vbW - contentW) / 2;
-    vbY = bounds.minY - VIEWBOX_PAD;
-  } else {
-    // Screen is taller — expand viewBox height, center vertically
-    vbW = contentW;
-    vbH = contentW / screenAspect;
-    vbX = bounds.minX - VIEWBOX_PAD;
-    vbY = bounds.minY - VIEWBOX_PAD - (vbH - contentH) / 2;
-  }
+  const { vbX, vbY, vbW, vbH } = computeViewBox(bounds, screenW, viewH);
 
   return (
     <GestureHandlerRootView style={styles.fill}>
@@ -249,30 +204,8 @@ export default function MindMap() {
               {nodes.map((node) => (
                 <MindMapNode key={node.id} node={node} />
               ))}
-              {/* Debug dots: A=blue B=red E=white */}
-              {debugTaps.map((tap, i) => (
-                <React.Fragment key={`debug-${i}`}>
-                  <SvgCircle cx={tap.svgA.x} cy={tap.svgA.y} r={10} fill="blue" opacity={0.7} />
-                  <SvgCircle cx={tap.svgB.x} cy={tap.svgB.y} r={8} fill="red" opacity={0.7} />
-                  <SvgCircle cx={tap.svgE.x} cy={tap.svgE.y} r={6} fill="white" opacity={0.9} />
-                </React.Fragment>
-              ))}
             </Svg>
           </Animated.View>
-          {/* Debug overlay: shows raw + computed coords */}
-          <View style={styles.debugOverlay} pointerEvents="none">
-            <ThemedText style={styles.debugText}>
-              screenW={Math.round(screenW)} viewH={Math.round(viewH)} halfW={Math.round(halfW)} halfH={Math.round(halfH)}
-            </ThemedText>
-            <ThemedText style={styles.debugText}>
-              A=blue: (e-half-t)/s+half{'\n'}B=red: e-t{'\n'}E=white: (e+screen*(s-1)-t)/s
-            </ThemedText>
-            {debugTaps.slice(-2).map((tap, i) => (
-              <ThemedText key={`debug-${i}`} style={styles.debugText}>
-                e=({Math.round(tap.ex)},{Math.round(tap.ey)}) abs=({Math.round(tap.absX)},{Math.round(tap.absY)}) t=({Math.round(tap.tx)},{Math.round(tap.ty)}) s={tap.s.toFixed(2)}
-              </ThemedText>
-            ))}
-          </View>
         </Animated.View>
       </GestureDetector>
     </GestureHandlerRootView>
@@ -287,19 +220,5 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  debugOverlay: {
-    position: 'absolute',
-    top: 8,
-    left: 8,
-    right: 8,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    padding: 6,
-    borderRadius: 6,
-  },
-  debugText: {
-    fontSize: 10,
-    color: '#0f0',
-    fontFamily: 'monospace',
   },
 });
