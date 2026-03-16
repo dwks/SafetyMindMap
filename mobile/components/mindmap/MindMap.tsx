@@ -301,7 +301,7 @@ export default function MindMap() {
       savedScale.value = scale.value;
     })
     .onUpdate((e) => {
-      scale.value = Math.min(3.0, Math.max(0.3, savedScale.value * e.scale));
+      scale.value = Math.min(10.0, Math.max(0.3, savedScale.value * e.scale));
     });
 
   const composed = Gesture.Race(
