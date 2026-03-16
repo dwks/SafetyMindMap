@@ -19,12 +19,17 @@ export interface PositionedNode {
   y: number;
   width: number;
   height: number;
+  hasChildren: boolean;
+  isExpanded: boolean;
+  side: 'left' | 'right' | 'root';
+  depth: number;
 }
 
 export interface Edge {
-  fromX: number;
-  fromY: number;
-  toX: number;
-  toY: number;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
   color: string;
+  side: 'left' | 'right';
 }

@@ -1,17 +1,26 @@
 import React from 'react';
-import { G, Rect, Text as SvgText } from 'react-native-svg';
+import { G, Rect, Text as SvgText, Circle } from 'react-native-svg';
 import { PositionedNode } from '@/types/tree';
 
 interface Props {
   node: PositionedNode;
+  onPress?: (id: string) => void;
 }
 
-export default function MindMapNode({ node }: Props) {
+export default function MindMapNode({ node, onPress }: Props) {
   const label = node.icon ? `${node.icon} ${node.title}` : node.title;
-  const fontSize = node.width > 100 ? 14 : 11;
+  const fontSize = node.depth === 0 ? 14 : 11;
+  const indicatorRadius = 8;
+
+  // Position expand indicator on the child-facing edge
+  const indicatorX =
+    node.side === 'left'
+      ? node.x - node.width / 2 - indicatorRadius - 2
+      : node.x + node.width / 2 + indicatorRadius + 2;
+  const indicatorY = node.y;
 
   return (
-    <G>
+    <G onPress={() => onPress?.(node.id)}>
       <Rect
         x={node.x - node.width / 2}
         y={node.y - node.height / 2}
@@ -30,6 +39,28 @@ export default function MindMapNode({ node }: Props) {
       >
         {label}
       </SvgText>
+      {node.hasChildren && (
+        <>
+          <Circle
+            cx={indicatorX}
+            cy={indicatorY}
+            r={indicatorRadius}
+            fill={node.color}
+            stroke="white"
+            strokeWidth={1.5}
+          />
+          <SvgText
+            x={indicatorX}
+            y={indicatorY + 4}
+            textAnchor="middle"
+            fontSize={12}
+            fill="white"
+            fontWeight="bold"
+          >
+            {node.isExpanded ? '−' : '+'}
+          </SvgText>
+        </>
+      )}
     </G>
   );
 }

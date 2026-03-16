@@ -7,11 +7,9 @@ interface Props {
 }
 
 export default function MindMapEdge({ edge }: Props) {
-  // Quadratic bezier with control point at midpoint offset toward origin
-  const mx = (edge.fromX + edge.toX) / 2;
-  const my = (edge.fromY + edge.toY) / 2;
+  const cpOffset = Math.abs(edge.endX - edge.startX) * 0.4;
 
-  const d = `M ${edge.fromX} ${edge.fromY} Q ${mx} ${my} ${edge.toX} ${edge.toY}`;
+  const d = `M ${edge.startX},${edge.startY} C ${edge.startX + (edge.side === 'right' ? cpOffset : -cpOffset)},${edge.startY} ${edge.endX + (edge.side === 'right' ? -cpOffset : cpOffset)},${edge.endY} ${edge.endX},${edge.endY}`;
 
   return (
     <Path

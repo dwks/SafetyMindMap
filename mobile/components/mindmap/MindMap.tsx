@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
@@ -11,12 +11,25 @@ import { layoutTree } from './layout';
 import MindMapEdge from './MindMapEdge';
 import MindMapNode from './MindMapNode';
 
-const SVG_SIZE = 4000;
+function collectDefaultExpanded(node: TreeNode, set: Set<string>): void {
+  if (node.default_expanded && node.id) set.add(node.id);
+  if (node.children) {
+    for (const child of node.children) collectDefaultExpanded(child, set);
+  }
+}
+
+function assignIds(node: TreeNode, counter = { value: 0 }): void {
+  if (!node.id) node.id = `node-${counter.value++}`;
+  if (node.children) {
+    for (const child of node.children) assignIds(child, counter);
+  }
+}
 
 export default function MindMap() {
   const { width: screenW, height: screenH } = useWindowDimensions();
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -31,11 +44,37 @@ export default function MindMap() {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then(setTree)
+      .then((data: TreeNode) => {
+        assignIds(data);
+        // Root is always expanded, plus any default_expanded nodes
+        const initial = new Set<string>();
+        if (data.id) initial.add(data.id);
+        collectDefaultExpanded(data, initial);
+        setExpandedIds(initial);
+        setTree(data);
+      })
       .catch((e) => setError(e.message));
   }, []);
 
+  const handleNodePress = useCallback((id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const layout = useMemo(() => {
+    if (!tree) return null;
+    return layoutTree(tree, expandedIds);
+  }, [tree, expandedIds]);
+
   const panGesture = Gesture.Pan()
+    .minDistance(10)
     .onStart(() => {
       savedTranslateX.value = translateX.value;
       savedTranslateY.value = translateY.value;
@@ -71,7 +110,7 @@ export default function MindMap() {
     );
   }
 
-  if (!tree) {
+  if (!tree || !layout) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" />
@@ -80,27 +119,27 @@ export default function MindMap() {
     );
   }
 
-  const { nodes, edges } = layoutTree(tree);
-
-  // Center SVG so root (0,0) is at screen center
-  const offsetX = screenW / 2 - SVG_SIZE / 2;
-  const offsetY = screenH / 2 - SVG_SIZE / 2;
+  const { nodes, edges, bounds } = layout;
+  const pad = 40;
+  const vbX = bounds.minX - pad;
+  const vbY = bounds.minY - pad;
+  const vbW = bounds.maxX - bounds.minX + pad * 2;
+  const vbH = bounds.maxY - bounds.minY + pad * 2;
 
   return (
     <GestureHandlerRootView style={styles.fill}>
       <GestureDetector gesture={composed}>
         <Animated.View style={[styles.fill, animatedStyle]}>
           <Svg
-            width={SVG_SIZE}
-            height={SVG_SIZE}
-            viewBox={`${-SVG_SIZE / 2} ${-SVG_SIZE / 2} ${SVG_SIZE} ${SVG_SIZE}`}
-            style={{ position: 'absolute', left: offsetX, top: offsetY }}
+            width={screenW}
+            height={screenH}
+            viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`}
           >
             {edges.map((edge, i) => (
               <MindMapEdge key={`e-${i}`} edge={edge} />
             ))}
             {nodes.map((node) => (
-              <MindMapNode key={node.id} node={node} />
+              <MindMapNode key={node.id} node={node} onPress={handleNodePress} />
             ))}
           </Svg>
         </Animated.View>
