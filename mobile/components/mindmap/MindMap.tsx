@@ -15,6 +15,10 @@ const VIEWBOX_PAD = 40;
 const MIN_VB_W = 600;
 const MIN_VB_H = 400;
 const ANIM_DURATION = 300;
+const MAX_ZOOM = 10;
+const MIN_ZOOM = 0.3;
+
+interface VB { vbX: number; vbY: number; vbW: number; vbH: number }
 
 function collectDefaultExpanded(node: TreeNode, set: Set<string>): void {
   if (node.default_expanded && node.id) set.add(node.id);
@@ -34,7 +38,7 @@ function easeInOutQuad(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
 }
 
-function computeViewBox(bounds: LayoutResult['bounds'], screenW: number, viewH: number) {
+function computeViewBox(bounds: LayoutResult['bounds'], screenW: number, viewH: number): VB {
   let contentW = bounds.maxX - bounds.minX + VIEWBOX_PAD * 2;
   let contentH = bounds.maxY - bounds.minY + VIEWBOX_PAD * 2;
   contentW = Math.max(contentW, MIN_VB_W);
@@ -58,6 +62,28 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
+/** Compute the effective viewBox after applying a gesture transform */
+function applyTransformToVb(
+  vb: VB, tx: number, ty: number, s: number,
+  screenW: number, viewH: number,
+): VB {
+  const halfW = screenW / 2;
+  const halfH = viewH / 2;
+  // Screen center maps to SVG point:
+  const localCX = (halfW - halfW - tx) / s + halfW; // = -tx/s + halfW
+  const localCY = (halfH - halfH - ty) / s + halfH; // = -ty/s + halfH
+  const svgCX = vb.vbX + (localCX / screenW) * vb.vbW;
+  const svgCY = vb.vbY + (localCY / viewH) * vb.vbH;
+  const newVbW = vb.vbW / s;
+  const newVbH = vb.vbH / s;
+  return {
+    vbX: svgCX - newVbW / 2,
+    vbY: svgCY - newVbH / 2,
+    vbW: newVbW,
+    vbH: newVbH,
+  };
+}
+
 interface PrevLayout {
   positions: Map<string, { x: number; y: number }>;
   bounds: LayoutResult['bounds'];
@@ -70,6 +96,7 @@ export default function MindMap() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [viewH, setViewH] = useState(screenH);
   const [animProgress, setAnimProgress] = useState(1);
+  const [cameraVb, setCameraVb] = useState<VB | null>(null);
 
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -78,9 +105,17 @@ export default function MindMap() {
   const savedTranslateY = useSharedValue(0);
   const savedScale = useSharedValue(1);
 
+  // Track active gesture count to know when all gestures are done
+  const gestureCount = useSharedValue(0);
+  // Committed zoom ratio (shared value for UI thread access in pinch limiter)
+  const committedZoom = useSharedValue(1);
+
   const prevLayoutRef = useRef<PrevLayout | null>(null);
   const animFrameRef = useRef<number>(0);
   const animTargetLayoutRef = useRef<LayoutResult | null>(null);
+  const naturalVbRef = useRef<VB>({ vbX: 0, vbY: 0, vbW: 1, vbH: 1 });
+  const cameraVbRef = useRef<VB | null>(null);
+  cameraVbRef.current = cameraVb;
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/api/tree`)
@@ -116,12 +151,22 @@ export default function MindMap() {
     return layoutTree(tree, expandedIds);
   }, [tree, expandedIds]);
 
+  // Reset camera when layout changes (expand/collapse)
+  useEffect(() => {
+    if (layout) {
+      setCameraVb(null);
+      committedZoom.value = 1;
+      translateX.value = 0;
+      translateY.value = 0;
+      scale.value = 1;
+    }
+  }, [layout]);
+
   // Start animation when layout changes
   useEffect(() => {
     if (!layout) return;
 
     if (prevLayoutRef.current) {
-      // Cancel any in-progress animation
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
 
       animTargetLayoutRef.current = layout;
@@ -136,13 +181,11 @@ export default function MindMap() {
         if (t < 1) {
           animFrameRef.current = requestAnimationFrame(animate);
         } else {
-          // Animation complete — save current positions
           savePrevLayout(layout);
         }
       };
       animFrameRef.current = requestAnimationFrame(animate);
     } else {
-      // First layout — no animation, just save positions
       animTargetLayoutRef.current = layout;
       savePrevLayout(layout);
     }
@@ -165,19 +208,15 @@ export default function MindMap() {
     if (!layout) return null;
 
     const prev = prevLayoutRef.current;
-    // If layout changed but the useEffect hasn't started the animation yet,
-    // treat progress as 0 to avoid a flash of final positions.
     const layoutIsNew = layout !== animTargetLayoutRef.current;
     const t = (layoutIsNew && prev) ? 0 : animProgress;
     const settled = t >= 1 || !prev;
 
-    // Interpolate nodes
     const displayNodes: PositionedNode[] = settled
       ? layout.nodes
       : layout.nodes.map((node) => {
           const prevPos = prev.positions.get(node.id);
           if (!prevPos) {
-            // New node: fade in, start from parent-ish position (use target for now)
             return { ...node, opacity: t };
           }
           return {
@@ -187,25 +226,20 @@ export default function MindMap() {
           };
         });
 
-    // Build a position map from displayNodes for edge computation
     const posMap = new Map<string, { x: number; y: number; width: number }>();
     for (const n of displayNodes) {
       posMap.set(n.id, { x: n.x, y: n.y, width: n.width });
     }
 
-    // Recompute edges from interpolated node positions
     const displayEdges: Edge[] = layout.edges.map((edge, i) => {
       if (settled) return edge;
 
-      // Find the corresponding target node for this edge (edge i maps roughly to node i+1)
-      // Instead, recompute from node positions directly
-      const targetNode = layout.nodes[i + 1]; // edges[i] connects to nodes[i+1]
+      const targetNode = layout.nodes[i + 1];
       if (!targetNode) return { ...edge, opacity: t };
 
       const targetPos = posMap.get(targetNode.id);
       if (!targetPos) return { ...edge, opacity: t };
 
-      // Find parent node
       const parentNode = findParentForEdge(layout.nodes, edge);
       const parentPos = parentNode ? posMap.get(parentNode.id) : null;
 
@@ -231,7 +265,6 @@ export default function MindMap() {
       };
     });
 
-    // Interpolate viewBox bounds
     let displayBounds = layout.bounds;
     if (!settled) {
       displayBounds = {
@@ -245,26 +278,57 @@ export default function MindMap() {
     return { nodes: displayNodes, edges: displayEdges, bounds: displayBounds };
   }, [layout, animProgress]);
 
+  // Compute the natural viewBox from display bounds
+  const naturalVb = useMemo(() => {
+    if (!display) return null;
+    return computeViewBox(display.bounds, screenW, viewH);
+  }, [display, screenW, viewH]);
+
+  if (naturalVb) naturalVbRef.current = naturalVb;
+
+  // The viewBox used for rendering (camera override or natural)
+  const activeVb = cameraVb ?? naturalVb;
+
   const layoutRef = useRef<LayoutResult | null>(null);
   layoutRef.current = layout;
 
   const halfW = screenW / 2;
   const halfH = viewH / 2;
 
-  // Hit-test tap: invert the simplified transform [translate, scale]
-  // RN applies scale around view center, so:
-  //   screenPt = (localPt - half) * s + half + t
-  //   localPt  = (screenPt - half - t) / s + half
-  const handleTap = useCallback((ex: number, ey: number, tx: number, ty: number, s: number) => {
+  // Commit gesture transform into the viewBox on release
+  const commitCamera = useCallback((tx: number, ty: number, s: number) => {
+    if (s === 1 && tx === 0 && ty === 0) return;
+
+    const currentVb = cameraVbRef.current ?? naturalVbRef.current;
+    const newVb = applyTransformToVb(currentVb, tx, ty, s, screenW, viewH);
+
+    // Compute total zoom relative to natural viewBox
+    const totalZoom = naturalVbRef.current.vbW / newVb.vbW;
+
+    // Reset shared values first (same JS tick, should batch with state update)
+    translateX.value = 0;
+    translateY.value = 0;
+    scale.value = 1;
+    committedZoom.value = totalZoom;
+
+    setCameraVb(newVb);
+  }, [screenW, viewH]);
+
+  // Hit-test tap: account for camera viewBox + gesture transform
+  const handleTap = useCallback((
+    ex: number, ey: number, tx: number, ty: number, s: number,
+    avbX: number, avbY: number, avbW: number, avbH: number,
+  ) => {
     const l = layoutRef.current;
     if (!l) return;
 
+    // Invert the gesture transform to get local screen coords
     const localX = (ex - halfW - tx) / s + halfW;
     const localY = (ey - halfH - ty) / s + halfH;
 
-    const { vbX, vbY, vbW, vbH } = computeViewBox(l.bounds, screenW, viewH);
-    const svgX = vbX + (localX / screenW) * vbW;
-    const svgY = vbY + (localY / viewH) * vbH;
+    // Map local coords to SVG coords via the active viewBox
+    const svgX = avbX + (localX / screenW) * avbW;
+    const svgY = avbY + (localY / viewH) * avbH;
 
     for (const node of l.nodes) {
       const hitPad = 6;
@@ -280,28 +344,61 @@ export default function MindMap() {
     }
   }, [screenW, viewH, halfW, halfH, handleNodePress]);
 
+  // We need activeVb values accessible from the UI thread for tap handling.
+  // Store them in shared values updated from JS.
+  const activeVbX = useSharedValue(0);
+  const activeVbY = useSharedValue(0);
+  const activeVbW = useSharedValue(1);
+  const activeVbH = useSharedValue(1);
+  if (activeVb) {
+    activeVbX.value = activeVb.vbX;
+    activeVbY.value = activeVb.vbY;
+    activeVbW.value = activeVb.vbW;
+    activeVbH.value = activeVb.vbH;
+  }
+
   const tapGesture = Gesture.Tap()
     .onEnd((e) => {
-      runOnJS(handleTap)(e.x, e.y, translateX.value, translateY.value, scale.value);
+      runOnJS(handleTap)(
+        e.x, e.y,
+        translateX.value, translateY.value, scale.value,
+        activeVbX.value, activeVbY.value, activeVbW.value, activeVbH.value,
+      );
     });
 
   const panGesture = Gesture.Pan()
     .minDistance(10)
     .onStart(() => {
+      gestureCount.value++;
       savedTranslateX.value = translateX.value;
       savedTranslateY.value = translateY.value;
     })
     .onUpdate((e) => {
       translateX.value = savedTranslateX.value + e.translationX;
       translateY.value = savedTranslateY.value + e.translationY;
+    })
+    .onEnd(() => {
+      gestureCount.value--;
+      if (gestureCount.value === 0) {
+        runOnJS(commitCamera)(translateX.value, translateY.value, scale.value);
+      }
     });
 
   const pinchGesture = Gesture.Pinch()
     .onStart(() => {
+      gestureCount.value++;
       savedScale.value = scale.value;
     })
     .onUpdate((e) => {
-      scale.value = Math.min(10.0, Math.max(0.3, savedScale.value * e.scale));
+      const totalZoom = committedZoom.value * savedScale.value * e.scale;
+      const clampedTotal = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, totalZoom));
+      scale.value = clampedTotal / committedZoom.value;
+    })
+    .onEnd(() => {
+      gestureCount.value--;
+      if (gestureCount.value === 0) {
+        runOnJS(commitCamera)(translateX.value, translateY.value, scale.value);
+      }
     });
 
   const composed = Gesture.Race(
@@ -309,8 +406,6 @@ export default function MindMap() {
     Gesture.Simultaneous(panGesture, pinchGesture),
   );
 
-  // Simplified transform: just translate + scale.
-  // RN applies transforms around view center automatically.
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: translateX.value },
@@ -327,7 +422,7 @@ export default function MindMap() {
     );
   }
 
-  if (!tree || !layout || !display) {
+  if (!tree || !layout || !display || !activeVb) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" />
@@ -335,8 +430,6 @@ export default function MindMap() {
       </View>
     );
   }
-
-  const { vbX, vbY, vbW, vbH } = computeViewBox(display.bounds, screenW, viewH);
 
   return (
     <GestureHandlerRootView style={styles.fill}>
@@ -349,7 +442,7 @@ export default function MindMap() {
             <Svg
               width={screenW}
               height={viewH}
-              viewBox={`${vbX} ${vbY} ${vbW} ${vbH}`}
+              viewBox={`${activeVb.vbX} ${activeVb.vbY} ${activeVb.vbW} ${activeVb.vbH}`}
             >
               {display.edges.map((edge, i) => (
                 <MindMapEdge key={`e-${i}`} edge={edge} />
