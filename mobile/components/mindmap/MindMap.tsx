@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, { runOnJS, useAnimatedProps, useSharedValue } from 'react-native-reanimated';
+import Animated, { runOnJS, useSharedValue } from 'react-native-reanimated';
 import Svg from 'react-native-svg';
 
 import { API_BASE_URL } from '@/constants/api';
@@ -11,14 +11,14 @@ import { layoutTree, LayoutResult } from './layout';
 import MindMapEdge from './MindMapEdge';
 import MindMapNode from './MindMapNode';
 
-const AnimatedSvg = Animated.createAnimatedComponent(Svg);
-
 const VIEWBOX_PAD = 40;
 const MIN_VB_W = 600;
 const MIN_VB_H = 400;
 const ANIM_DURATION = 300;
 const MAX_ZOOM = 10;
 const MIN_ZOOM = 0.3;
+
+interface VB { vbX: number; vbY: number; vbW: number; vbH: number }
 
 function collectDefaultExpanded(node: TreeNode, set: Set<string>): void {
   if (node.default_expanded && node.id) set.add(node.id);
@@ -38,7 +38,7 @@ function easeInOutQuad(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
 }
 
-function computeViewBox(bounds: LayoutResult['bounds'], screenW: number, viewH: number) {
+function computeViewBox(bounds: LayoutResult['bounds'], screenW: number, viewH: number): VB {
   let contentW = bounds.maxX - bounds.minX + VIEWBOX_PAD * 2;
   let contentH = bounds.maxY - bounds.minY + VIEWBOX_PAD * 2;
   contentW = Math.max(contentW, MIN_VB_W);
@@ -74,21 +74,18 @@ export default function MindMap() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [viewH, setViewH] = useState(screenH);
   const [animProgress, setAnimProgress] = useState(1);
+  const [cameraVb, setCameraVb] = useState<VB | null>(null);
 
-  // Camera viewBox — driven by shared values for UI-thread gesture updates
+  // Shared values for UI-thread gesture computation
   const camVbX = useSharedValue(0);
   const camVbY = useSharedValue(0);
   const camVbW = useSharedValue(MIN_VB_W);
   const camVbH = useSharedValue(MIN_VB_H);
-
-  // Natural viewBox width (for zoom limit computation)
   const naturalVbWShared = useSharedValue(MIN_VB_W);
-
-  // Screen dimensions as shared values (for UI-thread access)
   const screenWS = useSharedValue(screenW);
   const viewHS = useSharedValue(viewH);
 
-  // Gesture state
+  // Gesture state (all on UI thread)
   const gestureCount = useSharedValue(0);
   const savedVbX = useSharedValue(0);
   const savedVbY = useSharedValue(0);
@@ -105,7 +102,6 @@ export default function MindMap() {
   const animFrameRef = useRef<number>(0);
   const animTargetLayoutRef = useRef<LayoutResult | null>(null);
 
-  // Keep screen dimension shared values in sync
   useEffect(() => { screenWS.value = screenW; }, [screenW]);
   useEffect(() => { viewHS.value = viewH; }, [viewH]);
 
@@ -142,6 +138,11 @@ export default function MindMap() {
     if (!tree) return null;
     return layoutTree(tree, expandedIds);
   }, [tree, expandedIds]);
+
+  // Reset camera on layout change
+  useEffect(() => {
+    if (layout) setCameraVb(null);
+  }, [layout]);
 
   // Start animation when layout changes
   useEffect(() => {
@@ -259,31 +260,36 @@ export default function MindMap() {
     return { nodes: displayNodes, edges: displayEdges, bounds: displayBounds };
   }, [layout, animProgress]);
 
-  // Compute the natural viewBox from display bounds
+  // Natural viewBox from display bounds
   const naturalVb = useMemo(() => {
     if (!display) return null;
     return computeViewBox(display.bounds, screenW, viewH);
   }, [display, screenW, viewH]);
 
-  // Update camera viewBox from JS when layout/animation changes
+  // Sync natural viewBox to shared values (for gesture computation on UI thread)
   useEffect(() => {
     if (!naturalVb) return;
-    camVbX.value = naturalVb.vbX;
-    camVbY.value = naturalVb.vbY;
-    camVbW.value = naturalVb.vbW;
-    camVbH.value = naturalVb.vbH;
+    const vb = cameraVb ?? naturalVb;
+    camVbX.value = vb.vbX;
+    camVbY.value = vb.vbY;
+    camVbW.value = vb.vbW;
+    camVbH.value = vb.vbH;
     naturalVbWShared.value = naturalVb.vbW;
-  }, [naturalVb]);
+  }, [naturalVb, cameraVb]);
 
   const layoutRef = useRef<LayoutResult | null>(null);
   layoutRef.current = layout;
 
-  // --- Gesture handling: all viewBox manipulation, no transforms ---
+  // --- Gesture handling ---
+
+  // Called from UI thread via runOnJS to update React state
+  const updateCameraVb = useCallback((vbX: number, vbY: number, vbW: number, vbH: number) => {
+    setCameraVb({ vbX, vbY, vbW, vbH });
+  }, []);
 
   const recomputeVb = () => {
     'worklet';
     let s = gestureScaleVal.value;
-    // Clamp zoom: total zoom = naturalVbW / (savedVbW / s) = naturalVbW * s / savedVbW
     const maxS = MAX_ZOOM * savedVbW.value / naturalVbWShared.value;
     const minS = MIN_ZOOM * savedVbW.value / naturalVbWShared.value;
     s = Math.min(maxS, Math.max(minS, s));
@@ -291,20 +297,23 @@ export default function MindMap() {
     const newW = savedVbW.value / s;
     const newH = savedVbH.value / s;
 
-    // Zoom around focal point
     const fSvgX = savedVbX.value + focalFracX.value * savedVbW.value;
     const fSvgY = savedVbY.value + focalFracY.value * savedVbH.value;
     const zoomedVbX = fSvgX - focalFracX.value * newW;
     const zoomedVbY = fSvgY - focalFracY.value * newH;
 
-    // Pan: convert screen pixels to SVG units at current zoom
     const panSvgX = gesturePanX.value * (newW / screenWS.value);
     const panSvgY = gesturePanY.value * (newH / viewHS.value);
 
-    camVbX.value = zoomedVbX - panSvgX;
-    camVbY.value = zoomedVbY - panSvgY;
+    const finalX = zoomedVbX - panSvgX;
+    const finalY = zoomedVbY - panSvgY;
+
+    camVbX.value = finalX;
+    camVbY.value = finalY;
     camVbW.value = newW;
     camVbH.value = newH;
+
+    runOnJS(updateCameraVb)(finalX, finalY, newW, newH);
   };
 
   const saveGestureState = () => {
@@ -398,11 +407,6 @@ export default function MindMap() {
     Gesture.Simultaneous(panGesture, pinchGesture),
   );
 
-  // Animated SVG viewBox — updated on UI thread by gestures, no React re-render needed
-  const animatedSvgProps = useAnimatedProps(() => ({
-    viewBox: `${camVbX.value} ${camVbY.value} ${camVbW.value} ${camVbH.value}`,
-  }));
-
   if (error) {
     return (
       <View style={styles.center}>
@@ -420,6 +424,8 @@ export default function MindMap() {
     );
   }
 
+  const activeVb = cameraVb ?? naturalVb!;
+
   return (
     <GestureHandlerRootView style={styles.fill}>
       <GestureDetector gesture={composed}>
@@ -427,10 +433,10 @@ export default function MindMap() {
           style={[styles.fill, { backgroundColor: '#121212' }]}
           onLayout={(e) => setViewH(e.nativeEvent.layout.height)}
         >
-          <AnimatedSvg
+          <Svg
             width={screenW}
             height={viewH}
-            animatedProps={animatedSvgProps}
+            viewBox={`${activeVb.vbX} ${activeVb.vbY} ${activeVb.vbW} ${activeVb.vbH}`}
           >
             {display.edges.map((edge, i) => (
               <MindMapEdge key={`e-${i}`} edge={edge} />
@@ -438,7 +444,7 @@ export default function MindMap() {
             {display.nodes.map((node) => (
               <MindMapNode key={node.id} node={node} />
             ))}
-          </AnimatedSvg>
+          </Svg>
         </Animated.View>
       </GestureDetector>
     </GestureHandlerRootView>
