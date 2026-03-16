@@ -11,7 +11,7 @@ import { layoutTree } from './layout';
 import MindMapEdge from './MindMapEdge';
 import MindMapNode from './MindMapNode';
 
-const SVG_SIZE = 2000;
+const SVG_SIZE = 4000;
 
 export default function MindMap() {
   const { width: screenW, height: screenH } = useWindowDimensions();
