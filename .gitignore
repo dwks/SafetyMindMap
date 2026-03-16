@@ -1,3 +1,7 @@
 /env
 aisafety_raw.json
 aisafety_events.json
+backend/events.db
+backend/scrape.log
+backend/*.json
+backend/__pycache__/

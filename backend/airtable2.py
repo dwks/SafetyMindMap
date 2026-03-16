@@ -17,12 +17,15 @@ import json
 import re
 import sys
 import time
+from pathlib import Path
 from urllib.parse import urlencode, urlparse, parse_qs, unquote
 
+SCRIPT_DIR = Path(__file__).parent
 APP_ID = "appF8XfZUGXtfi40E"
 SHARE_ID = "shrLgl03tMK4q6cyc"
 EMBED_URL = f"https://airtable.com/embed/{APP_ID}/{SHARE_ID}?viewControls=on"
-OUTPUT_FILE = "aisafety_events.json"
+OUTPUT_FILE = SCRIPT_DIR / "aisafety_events.json"
+RAW_FILE = SCRIPT_DIR / "aisafety_raw.json"
 
 
 def extract_access_policy():
@@ -488,16 +491,24 @@ def main():
 
     # Step 3: Parse
     # Save raw response for debugging choice label discovery
-    with open("aisafety_raw.json", "w", encoding="utf-8") as f:
+    with open(RAW_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False, default=str)
-    print(f"  Raw response saved to aisafety_raw.json")
+    print(f"  Raw response saved to {RAW_FILE}")
 
     parsed = parse_airtable_data(data)
 
-    # Save
+    # Save JSON (debug artifact)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(parsed, f, indent=2, ensure_ascii=False, default=str)
-    print(f"\n✅ Saved to {OUTPUT_FILE}")
+    print(f"\n✅ Saved JSON to {OUTPUT_FILE}")
+
+    # Step 4: Write to SQLite
+    if isinstance(parsed, dict) and "records" in parsed:
+        import db
+        conn = db.get_connection()
+        db.init_schema(conn)
+        db.upsert_events(conn, parsed["records"])
+        conn.close()
 
     # Preview
     if isinstance(parsed, dict) and "records" in parsed:
